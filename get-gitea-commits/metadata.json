@@ -1,0 +1,7 @@
+{
+  "name": "get-gitea-commits",
+  "version": "1.0.0",
+  "description": "获取 Gitea 仓库的提交记录，支持获取所有可见仓库或指定仓库的提交",
+  "author": "mayidan",
+  "license": "MIT"
+}
