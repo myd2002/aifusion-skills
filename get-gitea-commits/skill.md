@@ -41,8 +41,15 @@ python scripts/get_commits.py --mode timerange --hours 48 --repo mayidan/project
 ## 返回内容
 每条提交包含：
 - 仓库名称
+- 分支名称（branch）
 - 提交者姓名
 - 提交时间
 - commit message
-- 改动的文件列表
-- 每个文件的具体diff内容
+- is_vague：message 是否模糊（影响 diff 详细程度）
+- stats：总新增行数、总删除行数、改动文件数
+- parent_shas：父提交 SHA，供报告生成器分析连续提交的关联性
+- files：改动文件列表
+  - 文件名、状态（added/modified/deleted）、新增行数、删除行数
+  - diff（智能模式）：
+    - message 清晰 → 只返回前10行预览 + 改动的函数名
+    - message 模糊 → 返回完整 diff
