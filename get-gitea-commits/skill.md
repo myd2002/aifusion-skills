@@ -1,6 +1,6 @@
 ---
 name: get-gitea-commits
-version: 1.0.0
+version: 1.1.0
 description: 获取 Gitea 仓库的提交记录
 author: mayidan
 ---
