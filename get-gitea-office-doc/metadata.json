@@ -1,0 +1,7 @@
+{
+  "name": "get-gitea-office-doc",
+  "version": "1.0.0",
+  "description": "从 Gitea 下载并解析办公文档（PDF/Word/PPT/Excel）的文字内容",
+  "author": "mayidan",
+  "license": "MIT"
+}

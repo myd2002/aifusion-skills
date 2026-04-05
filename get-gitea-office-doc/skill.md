@@ -1,108 +1,43 @@
 ---
 name: get-gitea-office-doc
-description: >
-  Use this skill whenever you need to read the actual content of a PPT / Word / PDF (office document) file stored in Gitea.
-  Triggers include: when get-gitea-commit or any other skill finds an office document in a commit/repo and needs to understand its content;
-  when the user asks to summarize, analyze, or review a .pptx / .docx / .pdf / .xlsx file from Gitea;
-  when a Gitea file URL or download URL points to an office document and you need its text.
-  DO NOT skip this skill just because you already have the file URL — always use this skill to extract readable text from office documents.
-  Workflow: download file from Gitea → extract text with Python → return content for Agent to summarize.
+version: 1.0.0
+description: 从 Gitea 下载并解析办公文档（PDF/Word/PPT/Excel）的文字内容
+author: mayidan
 ---
 
-# get-gitea-office-doc Skill
+# Get Gitea Office Doc
 
-## Purpose
+## 功能描述
+从 Gitea 仓库下载办公文档（.pdf / .docx / .pptx / .xlsx），用 Python 解析提取文字内容，返回给 Agent 进行总结分析。
 
-Extract readable text content from PPT / Word / PDF office documents stored in Gitea, so Agent can summarize or analyze them.
+## 使用场景
+- 当 get-gitea-commits 发现 commit 里有办公文档，需要了解其具体内容时
+- 当用户想查看/总结 Gitea 上某个 PPT、Word、PDF 的内容时
+- 在生成提交报告时，需要深入了解办公文档变更内容时
 
-**Supported formats:**
-- `.pdf` — PDF documents
-- `.docx` / `.doc` — Word documents
-- `.pptx` / `.ppt` — PowerPoint presentations
-- `.xlsx` / `.xls` — Excel spreadsheets (basic text/data extraction)
-
----
-
-## Step 1: Get the Gitea Raw Download URL
-
-You need the **raw download URL** for the file. It follows this pattern:
-
-http://<gitea_host>/api/v1/repos/<owner>/<repo>/raw/<filepath>?ref=<branch>&token=<api_token>
-
-**Gitea server info:**
-- Host: `http://43.156.243.152:3000`
-
-If you already have the file's raw URL from another skill (e.g., get-gitea-commit), use it directly.
-
-If you only have the repo + path, construct the URL:
-http://43.156.243.152:3000/api/v1/repos/{owner}/{repo}/raw/{filepath}?ref={branch}&token={token}
-
----
-
-## Step 2: Download and Extract — Run the Python Script
-
-Use the extraction script at `scripts/extract_office_doc.py`.
+## 使用方法
 ```bash
-python3 scripts/extract_office_doc.py \
-  --url "<raw_download_url>" \
-  --token "<gitea_api_token>"
+# 通过 Gitea 文件 URL 下载并提取
+python scripts/extract_office_doc.py --url <gitea_raw_url> --token <api_token>
+
+# 直接读取本地文件
+python scripts/extract_office_doc.py --local <local_file_path>
 ```
 
-Or if you already have the file locally:
-```bash
-python3 scripts/extract_office_doc.py \
-  --local "<local_file_path>"
-```
+## 参数说明
+- `--url`：Gitea 文件的 raw 下载地址，格式：`http://43.156.243.152:3000/api/v1/repos/{owner}/{repo}/raw/{filepath}?ref={branch}`
+- `--token`：Gitea API Token（从 .env 读取，通常不需要手动传）
+- `--local`：本地文件路径（与 --url 二选一）
+- `--filename`：手动指定文件名（用于类型判断，可选）
 
-The script will:
-1. Download the file (if URL provided)
-2. Detect file type by extension
-3. Extract all text content
-4. Print structured text to stdout
+## 返回内容
+- PDF：按页返回文字内容（最多20页）
+- Word：返回标题层级 + 正文 + 表格
+- PPT：按幻灯片返回所有文字（最多30页）
+- Excel：按 Sheet 返回数据（每Sheet最多100行）
 
----
-
-## Step 3: Combine with Other Content for Agent Summary
-
-After extracting the text, combine it with whatever triggered this skill and produce a coherent summary.
-
-**Example output structure:**
-
-```
-=== Commit Info ===
-Commit: abc123 by ZhangYiwen on 2025-03-01
-Message: "Add design spec for dexterous hand v2"
-
-=== Office Document Content: design_spec_v2.pptx ===
-[Slide 1] Title: Dexterous Hand Design Specification v2
-[Slide 2] Overview: This document covers...
-...
-
-=== Summary Request ===
-Please summarize the key points of the design document above.
-```
-
----
-
-## Error Handling
-
-| Situation | Action |
-|-----------|--------|
-| File is scanned PDF (no text layer) | Report: "PDF appears to be a scanned image, text extraction not possible without OCR" |
-| File too large (>50MB) | Extract first 20 pages / slides only, note truncation |
-| Unsupported format | Report the file type and skip extraction |
-| Download fails (401/403) | Check token; report authentication error |
-| Download fails (404) | Check URL/branch; report file not found |
-
----
-
-## Quick Reference: When Called from Another Skill
-
-When `get-gitea-commit` or similar skill encounters an office document:
-
-1. Note the file's raw URL or (repo + path + branch)
-2. Call this skill immediately before returning results
-3. Append extracted text to the commit/issue context
-4. Then summarize everything together
-
-**Do not** return a commit summary that says "contains a .pptx file" without first using this skill to extract its content.
+## 错误处理
+- 扫描版 PDF（无文字层）：提示无法提取，建议 OCR
+- 文件过大：自动截取前N页并提示
+- 不支持的格式：返回支持格式列表
+- 下载失败（401/403/404）：返回具体错误原因

@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""
-extract_office_doc.py
-Gitea Office Document Text Extractor
-
-Downloads a file from Gitea (or reads local file) and extracts text content
-from PDF / Word / PowerPoint / Excel files.
-
-Usage:
-  python3 extract_office_doc.py --url <gitea_raw_url> [--token <api_token>]
-  python3 extract_office_doc.py --local <local_file_path>
-"""
-
 import argparse
 import os
 import sys
@@ -18,10 +6,13 @@ import tempfile
 import urllib.request
 import urllib.error
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+GITEA_TOKEN = os.getenv("GITEA_TOKEN")
 
 
 def ensure_deps():
-    """Install required libraries if missing."""
     import subprocess
     packages = {
         "pypdf": "pypdf",
@@ -47,70 +38,54 @@ from pptx import Presentation
 import openpyxl
 
 
-def download_file(url: str, token: str = None) -> tuple:
-    """Download file from URL. Returns (content_bytes, filename)."""
+def download_file(url: str, token: str = None):
     req = urllib.request.Request(url)
-    if token:
-        req.add_header("Authorization", f"token {token}")
-
+    t = token or GITEA_TOKEN
+    if t:
+        req.add_header("Authorization", f"token {t}")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             content = resp.read()
             filename = url.split("?")[0].split("/")[-1]
             return content, filename
     except urllib.error.HTTPError as e:
-        if e.code == 401:
-            print(f"ERROR: Authentication failed (401). Check your API token.", file=sys.stderr)
-        elif e.code == 403:
-            print(f"ERROR: Access forbidden (403). You may not have permission.", file=sys.stderr)
-        elif e.code == 404:
-            print(f"ERROR: File not found (404). Check the URL and branch name.", file=sys.stderr)
-        else:
-            print(f"ERROR: HTTP {e.code} - {e.reason}", file=sys.stderr)
+        codes = {401: "认证失败，请检查 Token", 403: "无权限访问", 404: "文件不存在，请检查路径和分支"}
+        print(f"ERROR: {codes.get(e.code, f'HTTP {e.code}')}", file=sys.stderr)
         sys.exit(1)
     except urllib.error.URLError as e:
-        print(f"ERROR: Network error - {e.reason}", file=sys.stderr)
+        print(f"ERROR: 网络错误 - {e.reason}", file=sys.stderr)
         sys.exit(1)
 
 
-def extract_pdf(filepath: str) -> str:
+def extract_pdf(filepath):
     try:
         reader = PdfReader(filepath)
-        total_pages = len(reader.pages)
-        max_pages = min(total_pages, 20)
-
-        lines = []
-        lines.append(f"[PDF: {total_pages} pages total" +
-                      (f", showing first {max_pages}" if total_pages > max_pages else "") + "]")
-
-        for i, page in enumerate(reader.pages[:max_pages]):
+        total = len(reader.pages)
+        max_p = min(total, 20)
+        lines = [f"[PDF：共 {total} 页" + (f"，显示前 {max_p} 页" if total > max_p else "") + "]"]
+        for i, page in enumerate(reader.pages[:max_p]):
             text = page.extract_text()
             if text and text.strip():
-                lines.append(f"\n--- Page {i+1} ---")
+                lines.append(f"\n--- 第 {i+1} 页 ---")
                 lines.append(text.strip())
-
         result = "\n".join(lines)
-        text_content = "\n".join(lines[1:])
-        if total_pages > 0 and len(text_content.strip()) < 50:
-            return ("[PDF WARNING] Very little text extracted. This PDF may be a scanned image "
-                    "without a text layer.\n" + result)
+        if len(result.replace(lines[0], "").strip()) < 50:
+            return "[PDF 警告] 提取文字很少，该 PDF 可能是扫描件，需要 OCR 才能读取内容。\n" + result
         return result
     except Exception as e:
-        return f"[PDF ERROR] Failed to extract: {e}"
+        return f"[PDF 错误] {e}"
 
 
-def extract_docx(filepath: str) -> str:
+def extract_docx(filepath):
     try:
         doc = python_docx.Document(filepath)
         lines = []
-
-        core_props = doc.core_properties
-        if core_props.title:
-            lines.append(f"[Document Title: {core_props.title}]")
-        if core_props.author:
-            lines.append(f"[Author: {core_props.author}]")
+        cp = doc.core_properties
+        if cp.title:
+            lines.append(f"[文档标题：{cp.title}]")
+        if cp.author:
+            lines.append(f"[作者：{cp.author}]")
         lines.append("")
-
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
@@ -120,72 +95,60 @@ def extract_docx(filepath: str) -> str:
                 lines.append(f"\n{'#' * int(level) if level.isdigit() else '#'} {text}")
             else:
                 lines.append(text)
-
         if doc.tables:
-            lines.append("\n--- Tables ---")
-            for t_idx, table in enumerate(doc.tables):
-                lines.append(f"\n[Table {t_idx+1}]")
+            lines.append("\n--- 表格 ---")
+            for idx, table in enumerate(doc.tables):
+                lines.append(f"\n[表格 {idx+1}]")
                 for row in table.rows:
-                    row_data = [cell.text.strip() for cell in row.cells]
-                    lines.append(" | ".join(row_data))
-
+                    lines.append(" | ".join(cell.text.strip() for cell in row.cells))
         return "\n".join(lines)
     except Exception as e:
-        return f"[DOCX ERROR] Failed to extract: {e}"
+        return f"[Word 错误] {e}"
 
 
-def extract_pptx(filepath: str) -> str:
+def extract_pptx(filepath):
     try:
         prs = Presentation(filepath)
-        total_slides = len(prs.slides)
-        max_slides = min(total_slides, 30)
-
-        lines = []
-        lines.append(f"[PowerPoint: {total_slides} slides total" +
-                      (f", showing first {max_slides}" if total_slides > max_slides else "") + "]")
-
-        for i in range(max_slides):
+        total = len(prs.slides)
+        max_s = min(total, 30)
+        lines = [f"[PPT：共 {total} 张幻灯片" + (f"，显示前 {max_s} 张" if total > max_s else "") + "]"]
+        for i in range(max_s):
             slide = prs.slides[i]
-            slide_texts = []
+            texts = []
             for shape in slide.shapes:
                 if not shape.has_text_frame:
                     continue
                 for para in shape.text_frame.paragraphs:
                     text = para.text.strip()
                     if text:
-                        slide_texts.append(text)
-            if slide_texts:
-                lines.append(f"\n[Slide {i+1}]")
-                lines.extend(slide_texts)
-
+                        texts.append(text)
+            if texts:
+                lines.append(f"\n[第 {i+1} 张]")
+                lines.extend(texts)
         return "\n".join(lines)
     except Exception as e:
-        return f"[PPTX ERROR] Failed to extract: {e}"
+        return f"[PPT 错误] {e}"
 
 
-def extract_xlsx(filepath: str) -> str:
+def extract_xlsx(filepath):
     try:
         wb = openpyxl.load_workbook(filepath, data_only=True, read_only=True)
-        lines = []
-        lines.append(f"[Excel: {len(wb.sheetnames)} sheets: {', '.join(wb.sheetnames)}]")
-
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            lines.append(f"\n--- Sheet: {sheet_name} ---")
-            row_count = 0
+        lines = [f"[Excel：共 {len(wb.sheetnames)} 个Sheet：{', '.join(wb.sheetnames)}]"]
+        for name in wb.sheetnames:
+            ws = wb[name]
+            lines.append(f"\n--- Sheet：{name} ---")
+            count = 0
             for row in ws.iter_rows(values_only=True):
-                if all(cell is None or str(cell).strip() == "" for cell in row):
+                if all(c is None or str(c).strip() == "" for c in row):
                     continue
-                row_str = " | ".join(str(c) if c is not None else "" for c in row)
-                lines.append(row_str)
-                row_count += 1
-                if row_count >= 100:
-                    lines.append("... (truncated, showing first 100 non-empty rows)")
+                lines.append(" | ".join(str(c) if c is not None else "" for c in row))
+                count += 1
+                if count >= 100:
+                    lines.append("...（已截断，仅显示前100行）")
                     break
-
         return "\n".join(lines)
     except Exception as e:
-        return f"[XLSX ERROR] Failed to extract: {e}"
+        return f"[Excel 错误] {e}"
 
 
 EXTRACTORS = {
@@ -199,50 +162,38 @@ EXTRACTORS = {
 }
 
 
-def extract(filepath: str, filename: str = None) -> str:
-    name = filename or filepath
-    ext = Path(name).suffix.lower()
-
+def extract(filepath, filename=None):
+    ext = Path(filename or filepath).suffix.lower()
     if ext not in EXTRACTORS:
-        return (f"[UNSUPPORTED] File type '{ext}' is not supported.\n"
-                f"Supported: {', '.join(EXTRACTORS.keys())}")
-
+        return f"[不支持的格式] '{ext}'，支持：{', '.join(EXTRACTORS.keys())}"
     return EXTRACTORS[ext](filepath)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract text from office documents in Gitea")
+    parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--url", help="Gitea raw file download URL")
-    group.add_argument("--local", help="Local file path")
-    parser.add_argument("--token", help="Gitea API token (for --url)")
-    parser.add_argument("--filename", help="Override filename for type detection")
-
+    group.add_argument("--url")
+    group.add_argument("--local")
+    parser.add_argument("--token")
+    parser.add_argument("--filename")
     args = parser.parse_args()
 
     if args.url:
-        print(f"[Downloading from Gitea...]", file=sys.stderr)
         content, filename = download_file(args.url, args.token)
-        override_name = args.filename or filename
-        ext = Path(override_name).suffix.lower()
+        override = args.filename or filename
+        ext = Path(override).suffix.lower()
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
         try:
-            print(f"[Extracting content from: {override_name}]", file=sys.stderr)
-            result = extract(tmp_path, override_name)
+            print(extract(tmp_path, override))
         finally:
             os.unlink(tmp_path)
     else:
-        filepath = args.local
-        if not os.path.exists(filepath):
-            print(f"ERROR: File not found: {filepath}", file=sys.stderr)
+        if not os.path.exists(args.local):
+            print(f"ERROR: 文件不存在：{args.local}", file=sys.stderr)
             sys.exit(1)
-        override_name = args.filename or filepath
-        print(f"[Extracting content from local file: {override_name}]", file=sys.stderr)
-        result = extract(filepath, override_name)
-
-    print(result)
+        print(extract(args.local, args.filename or args.local))
 
 
 if __name__ == "__main__":
