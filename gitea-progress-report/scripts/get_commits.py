@@ -1,6 +1,7 @@
 import requests
 import os
 import json
+import argparse
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -42,6 +43,23 @@ def get_all_repos() -> list:
     return [r["full_name"] for r in repos]
 
 
+def get_branch_commit_map(repo_full_name: str) -> dict:
+    """
+    获取仓库所有分支及其最新 commit SHA 的映射。
+    用于判断某个 commit 属于哪个分支。
+    返回：{commit_sha: branch_name}
+    """
+    url = f"{GITEA_URL}/api/v1/repos/{repo_full_name}/branches"
+    response = requests.get(url, headers=HEADERS, params={"limit": 50})
+    sha_to_branch = {}
+    if response.status_code == 200:
+        for branch in response.json():
+            sha = branch["commit"]["id"]
+            name = branch["name"]
+            sha_to_branch[sha] = name
+    return sha_to_branch
+
+
 def get_commits_by_repo(repo_full_name: str, hours: int = 168) -> list:
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     url = f"{GITEA_URL}/api/v1/repos/{repo_full_name}/commits"
@@ -55,20 +73,23 @@ def get_commits_by_repo(repo_full_name: str, hours: int = 168) -> list:
         return []
 
     commits_raw = response.json()
+
+    # 获取分支映射
+    sha_to_branch = get_branch_commit_map(repo_full_name)
+
     result = []
     for commit in commits_raw:
         sha = commit["sha"]
         message = commit["commit"]["message"].strip()
 
-        # 获取文件变动统计
+        # 获取文件变动详情
         diff_url = f"{GITEA_URL}/api/v1/repos/{repo_full_name}/git/commits/{sha}"
         diff_resp = requests.get(diff_url, headers=HEADERS)
         files = []
         total_additions = 0
         total_deletions = 0
         if diff_resp.status_code == 200:
-            diff_data = diff_resp.json()
-            for f in diff_data.get("files", []):
+            for f in diff_resp.json().get("files", []):
                 total_additions += f.get("additions", 0)
                 total_deletions += f.get("deletions", 0)
                 files.append({
@@ -78,14 +99,19 @@ def get_commits_by_repo(repo_full_name: str, hours: int = 168) -> list:
                     "deletions": f.get("deletions", 0)
                 })
 
+        # 判断分支：用 SHA 匹配，匹配不到则标记为 main
+        branch = sha_to_branch.get(sha, None)
+        if not branch:
+            # 取第一个分支作为默认（大多数情况是 main）
+            branch = list(sha_to_branch.values())[0] if sha_to_branch else "main"
+
         result.append({
             "sha": sha[:8],
             "author": commit["commit"]["author"]["name"],
             "time": commit["commit"]["author"]["date"],
             "message": message,
             "is_vague": is_vague_message(message),
-            "branch": commit.get("ref", "unknown"),
-            "parents": [p["sha"][:8] for p in commit.get("parents", [])],
+            "branch": branch,
             "stats": {
                 "additions": total_additions,
                 "deletions": total_deletions,
@@ -98,7 +124,6 @@ def get_commits_by_repo(repo_full_name: str, hours: int = 168) -> list:
 
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=str, default=None)
     parser.add_argument("--hours", type=int, default=168)
