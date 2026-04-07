@@ -5,7 +5,9 @@ import argparse
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+# 修复 import 路径问题
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
+
 GITEA_URL = os.getenv("GITEA_URL")
 GITEA_TOKEN = os.getenv("GITEA_TOKEN")
 HEADERS = {"Authorization": f"token {GITEA_TOKEN}"}
@@ -43,25 +45,50 @@ def get_all_repos() -> list:
     return [r["full_name"] for r in repos]
 
 
-def get_branch_commit_map(repo_full_name: str) -> dict:
+def get_all_branch_commits(repo_full_name: str, since: datetime) -> dict:
     """
-    获取仓库所有分支及其最新 commit SHA 的映射。
-    用于判断某个 commit 属于哪个分支。
-    返回：{commit_sha: branch_name}
+    对每个分支单独拉取 commit 列表，建立完整的 sha->branch 映射。
+    这样每个 commit 都能准确对应到它所在的分支。
     """
+    sha_to_branch = {}
+
+    # 获取所有分支
     url = f"{GITEA_URL}/api/v1/repos/{repo_full_name}/branches"
     response = requests.get(url, headers=HEADERS, params={"limit": 50})
-    sha_to_branch = {}
-    if response.status_code == 200:
-        for branch in response.json():
-            sha = branch["commit"]["id"]
-            name = branch["name"]
-            sha_to_branch[sha] = name
+    if response.status_code != 200:
+        return sha_to_branch
+
+    branches = response.json()
+
+    for branch in branches:
+        branch_name = branch["name"]
+        # 对每个分支单独拉取 commit 列表
+        commits_url = f"{GITEA_URL}/api/v1/repos/{repo_full_name}/commits"
+        params = {
+            "sha": branch_name,
+            "limit": 50,
+            "since": since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        }
+        branch_resp = requests.get(commits_url, headers=HEADERS, params=params)
+        if branch_resp.status_code == 200:
+            for commit in branch_resp.json():
+                sha = commit["sha"]
+                # 只记录第一次出现（优先记录非 main 分支，更有信息量）
+                if sha not in sha_to_branch:
+                    sha_to_branch[sha] = branch_name
+                elif branch_name != "main" and branch_name != "master":
+                    sha_to_branch[sha] = branch_name
+
     return sha_to_branch
 
 
 def get_commits_by_repo(repo_full_name: str, hours: int = 168) -> list:
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    # 先建立完整的 sha->branch 映射
+    sha_to_branch = get_all_branch_commits(repo_full_name, since)
+
+    # 再拉取 commit 列表
     url = f"{GITEA_URL}/api/v1/repos/{repo_full_name}/commits"
     params = {
         "limit": 50,
@@ -73,11 +100,8 @@ def get_commits_by_repo(repo_full_name: str, hours: int = 168) -> list:
         return []
 
     commits_raw = response.json()
-
-    # 获取分支映射
-    sha_to_branch = get_branch_commit_map(repo_full_name)
-
     result = []
+
     for commit in commits_raw:
         sha = commit["sha"]
         message = commit["commit"]["message"].strip()
@@ -99,11 +123,8 @@ def get_commits_by_repo(repo_full_name: str, hours: int = 168) -> list:
                     "deletions": f.get("deletions", 0)
                 })
 
-        # 判断分支：用 SHA 匹配，匹配不到则标记为 main
-        branch = sha_to_branch.get(sha, None)
-        if not branch:
-            # 取第一个分支作为默认（大多数情况是 main）
-            branch = list(sha_to_branch.values())[0] if sha_to_branch else "main"
+        # 从映射里取分支，取不到则用 main
+        branch = sha_to_branch.get(sha, "main")
 
         result.append({
             "sha": sha[:8],
