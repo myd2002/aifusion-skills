@@ -1,7 +1,0 @@
-{
-  "name": "get-gitea-repo-structure",
-  "version": "1.0.0",
-  "description": "获取 Gitea 仓库在某一时刻的完整文件树快照，用于生成交付目录和识别核心文件",
-  "author": "mayidan",
-  "license": "MIT"
-}
