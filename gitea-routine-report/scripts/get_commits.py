@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # 修复 import 路径问题
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
+load_dotenv(os.path.expanduser("~/.config/gitea-routine-report/.env"))
 
 GITEA_URL = os.getenv("GITEA_URL")
 GITEA_TOKEN = os.getenv("GITEA_TOKEN")

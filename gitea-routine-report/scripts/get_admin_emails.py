@@ -3,7 +3,7 @@ import os
 import json
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(os.path.expanduser("~/.config/gitea-routine-report/.env"))
 GITEA_URL = os.getenv("GITEA_URL")
 GITEA_TOKEN = os.getenv("GITEA_TOKEN")
 HEADERS = {"Authorization": f"token {GITEA_TOKEN}"}
