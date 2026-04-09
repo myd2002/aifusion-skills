@@ -9,7 +9,9 @@ import os
 import json
 from datetime import datetime, timezone, timedelta
 
-GITEA_URL = os.getenv("GITEA_URL", "http://43.156.243.152:3000")
+GITEA_URL = os.getenv("GITEA_URL")
+if not GITEA_URL:
+    raise EnvironmentError("环境变量 GITEA_URL 未配置，请检查 ~/.config/gitea-routine-report/.env")
 
 RANK_ICONS = ["🥇", "🥈", "🥉"]
 
