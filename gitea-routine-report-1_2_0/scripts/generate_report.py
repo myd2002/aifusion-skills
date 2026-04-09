@@ -14,6 +14,74 @@ load_dotenv(os.path.expanduser("~/.config/gitea-routine-report/.env"))
 
 GITEA_URL = os.getenv("GITEA_URL")
 GITEA_TOKEN = os.getenv("GITEA_TOKEN")
+UTC_PLUS_8 = timezone(timedelta(hours=8))
+
+
+def parse_datetime_arg(value: str, end_of_day: bool = False) -> datetime:
+    """解析用户输入的时间字符串（按 UTC+8）并转换为 UTC。"""
+    value = value.strip()
+
+    if len(value) == 10:
+        dt = datetime.strptime(value, "%Y-%m-%d")
+        if end_of_day:
+            dt = dt + timedelta(hours=23, minutes=59, seconds=59)
+        return dt.replace(tzinfo=UTC_PLUS_8).astimezone(timezone.utc)
+
+    normalized = value.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                dt = datetime.strptime(value, fmt)
+                break
+            except ValueError:
+                dt = None
+        if dt is None:
+            raise ValueError(
+                "时间格式无效。请使用 YYYY-MM-DD 或 YYYY-MM-DDTHH:MM:SS（默认按 UTC+8 解释）"
+            )
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC_PLUS_8)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def resolve_time_window(since_arg: str, until_arg: str):
+    """统一时间窗口逻辑：输入和展示按 UTC+8，内部查询按 UTC。"""
+    now_bjt = datetime.now(UTC_PLUS_8)
+
+    if since_arg or until_arg:
+        if not since_arg or not until_arg:
+            raise ValueError("使用绝对时间段时，--since 和 --until 必须同时提供")
+
+        since_dt = parse_datetime_arg(since_arg, end_of_day=False)
+        until_dt = parse_datetime_arg(until_arg, end_of_day=True)
+
+        if since_dt > until_dt:
+            raise ValueError("时间范围无效：--since 不能晚于 --until")
+
+        time_desc = "自定义时间段"
+        since_bjt = since_dt.astimezone(UTC_PLUS_8)
+        until_bjt = until_dt.astimezone(UTC_PLUS_8)
+        time_range_detail = (
+            f"{since_bjt.strftime('%Y-%m-%d %H:%M:%S')} 至 "
+            f"{until_bjt.strftime('%Y-%m-%d %H:%M:%S')} (UTC+8)"
+        )
+        return since_dt, until_dt, time_desc, time_range_detail
+
+    since_bjt = now_bjt - timedelta(hours=168)
+    until_bjt = now_bjt
+    since_dt = since_bjt.astimezone(timezone.utc)
+    until_dt = until_bjt.astimezone(timezone.utc)
+    time_desc = "过去 7 天"
+    time_range_detail = (
+        f"{since_bjt.strftime('%Y-%m-%d %H:%M:%S')} 至 "
+        f"{until_bjt.strftime('%Y-%m-%d %H:%M:%S')} (UTC+8)"
+    )
+    return since_dt, until_dt, time_desc, time_range_detail
 
 
 def get_repo_members(repo_full_name: str) -> list:
@@ -76,18 +144,15 @@ def calc_inactive_days(last_commit_date: str) -> int:
         return -1
 
 
-def build_summary(repo: str, commits: list, hours: int) -> dict:
-    now = datetime.now(timezone.utc)
-    since = now - timedelta(hours=hours)
-
-    # 详细时间范围
-    time_range_detail = (
-        f"{since.strftime('%Y-%m-%d %H:%M:%S')} 至 "
-        f"{now.strftime('%Y-%m-%d %H:%M:%S')} (UTC)"
-    )
-    time_desc = f"过去 {hours} 小时" if hours < 168 else "过去 7 天"
+def build_summary(
+    repo: str,
+    commits: list,
+    time_desc: str,
+    time_range_detail: str,
+) -> dict:
+    now = datetime.now(UTC_PLUS_8)
     admin_email = get_admin_email(repo)
-    generated_at = now.strftime("%Y-%m-%d %H:%M UTC")
+    generated_at = now.strftime("%Y-%m-%d %H:%M UTC+8")
 
     # 获取仓库所有成员
     all_members = get_repo_members(repo)
@@ -211,15 +276,22 @@ def build_summary(repo: str, commits: list, hours: int) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=str, default=None)
-    parser.add_argument("--hours", type=int, default=168)
+    parser.add_argument("--since", type=str, default=None)
+    parser.add_argument("--until", type=str, default=None)
     args = parser.parse_args()
+
+    try:
+        since_dt, until_dt, time_desc, time_range_detail = resolve_time_window(args.since, args.until)
+    except ValueError as exc:
+        print(f"参数错误: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     repos = [args.repo] if args.repo else get_all_repos()
 
     results = []
     for repo in repos:
-        commits = get_commits_by_repo(repo, args.hours)
-        summary = build_summary(repo, commits, args.hours)
+        commits = get_commits_by_repo(repo, since=since_dt, until=until_dt)
+        summary = build_summary(repo, commits, time_desc, time_range_detail)
         results.append(summary)
 
     print(json.dumps(results, ensure_ascii=False, indent=2))
