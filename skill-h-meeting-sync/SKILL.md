@@ -1,108 +1,207 @@
 ---
 name: skill-h-meeting-sync
-description: >
-  cron 每30分钟触发。拉取腾讯会议未来7天列表与Gitea所有仓库
-  scheduled/brief-sent状态会议做三向对比。处理新增（暂存pending+通知组织者确认归属）、
-  取消（status→cancelled+全员通知）、改期（旧目录置rescheduled+新目录继承议程+全员通知）。
-  归档status∈{cancelled,rescheduled}且超30天的历史目录。无需手动触发。
+description: "【会议状态同步后台守护任务】每30分钟由 OpenClaw cron 触发一次。负责同步腾讯会议与各 Gitea 仓库之间的会议状态一致性，处理会议取消、改期、新增三种场景，并定期归档过期会议目录。不处理会议创建（用 skill-a）、会前简报（用 skill-b）、会后纪要（用 skill-c）等场景。"
+author: mayidan
 ---
 
-# Skill-H: meeting_sync
+# Skill-H: meeting_sync — 会议状态同步后台守护
 
-## 触发方式
+## 定位
 
-cron 定时，每 30 分钟运行一次：
+本技能是 **cron 每 30 分钟触发的后台守护任务**。
 
-```
-*/30 * * * * python -m skills.meeting_sync
-```
+职责分工：
 
-或直接调用：
+- **OpenClaw（本次对话/cron 任务）**
+  - 触发 scan，获取 Gitea 侧全部活跃会议
+  - 调用 tencent-meeting-skill 获取腾讯会议侧未来 7 天会议列表
+  - 做三向对比分析，判断每场会议属于哪种情况（取消 / 改期 / 新增 / 无变化）
+  - 根据分析结果，调用对应的 Skill-H 命令执行 Gitea 侧操作
+  - 调用 imap-smtp-email 发送通知邮件
+  - 在每次 cron 最后调用 archive 做归档清理
+
+- **Skill-H（本技能）**
+  - `scan`：汇总所有 Gitea 活跃会议（status ∈ {scheduled, brief-sent}），返回供对比的数据
+  - `cancel`：将会议标记为已取消，写日志，返回取消通知邮件参数
+  - `reschedule`：更新旧目录状态为 rescheduled，创建新时间目录，写日志，返回改期通知邮件参数
+  - `create-pending`：在 aifusion-meta 创建 repo:pending 的会议占位记录
+  - `archive`：将 cancelled/rescheduled 状态超过 30 天的目录移入 meetings/archive/
+
+- **tencent-meeting-skill**
+  - 查询腾讯会议侧未来 7 天的会议列表（`get_user_meetings`）
+
+- **imap-smtp-email**
+  - 发送取消通知、改期通知、新会议待确认通知邮件
+
+---
+
+## 配置要求
+
+配置文件：`~/.config/skill-h-meeting-sync/.env`
+
+首次使用前运行：
 
 ```bash
-python main.py
+bash setup.sh
 ```
 
-## 完整流程
+---
 
-```
-tencent_poller
-  └─ GET /v1/meetings → 未来7天会议列表
+## 严格工作流（每次 cron 触发必须按顺序执行）
 
-gitea_state
-  └─ 遍历所有受管仓库 meetings/*/meta.yaml
-  └─ 筛选 status ∈ {scheduled, brief-sent}
+---
 
-diff_engine（三向对比，按 meeting_id 匹配）
-  ├─ 新增：腾讯有 + Gitea 无
-  ├─ 取消：Gitea 有 + 腾讯无
-  ├─ 改期：两边都有，时间差 > 5 分钟
-  └─ 一致：无需处理
+### 第一步：scan，获取 Gitea 侧所有活跃会议
 
-handlers
-  ├─ 新增 → 暂存 aifusion-meta/pending/MEETING_ID.yaml
-  │          → 邮件通知 advisor 确认归属仓库
-  ├─ 取消 → meta.yaml: status → cancelled
-  │          → SMTP 全员通知
-  ├─ 改期 → 旧目录: status → rescheduled
-  │          → 新目录: status = scheduled（含 rescheduled_from 字段）
-  │          → 继承 organizer / attendees / agenda 议题
-  │          → SMTP 全员通知
-  └─ 归档 → collect_archivable_meetings()
-             → cancelled/rescheduled 且 > 30天
-             → 逐文件复制到 meetings/archive/
-             → 原目录 meta.yaml: status → archived
-
-写汇总日志到 aifusion-meta/logs/YYYY-MM-DD.jsonl
+```bash
+node main.js scan
 ```
 
-## 与 Skill-B 的协作关系
+返回 JSON，`gitea_meetings` 字段包含所有 status ∈ {scheduled, brief-sent} 的会议，每条包含：
 
-| Skill | 频率 | 职责 |
-|-------|------|------|
-| Skill-B | 每15分钟 | 顺手同步（发简报时附带检测新会议） |
-| Skill-H | 每30分钟 | 完整三向对比，处理取消/改期/归档 |
+- `repo`：仓库全名
+- `meeting_dir`：会议目录名
+- `meeting_id`：腾讯会议内部 ID（用于对比）
+- `meeting_code`：9 位会议号
+- `topic`：会议主题
+- `scheduled_time`：会议时间（ISO8601）
+- `status`：当前状态
+- `organizer`：组织者用户名
+- `attendees`：参会人用户名列表
+- `attendee_emails`：参会人邮箱列表
+- `category`：single | cross-project
 
-两者有意设计为冗余：Skill-B 的15分钟频率覆盖临时会议的快速响应，
-Skill-H 的完整对比保证状态长期一致。
+---
 
-## 新增会议的归属确认流程
+### 第二步：OpenClaw 调用 tencent-meeting-skill 获取腾讯会议列表
 
+调用 `get_user_meetings` 获取即将开始及进行中的会议，同时调用 `get_user_ended_meetings` 补充当天已结束会议。
+
+将结果整理为以 `meeting_id` 为 key 的字典，包含每场会议的 `scheduled_time`（开始时间戳）。
+
+> 判断"未来 7 天内"：只保留 scheduled_time 在 now ~ now+7d 范围内的腾讯会议记录用于对比。
+
+---
+
+### 第三步：OpenClaw 做三向对比分析
+
+以 `meeting_id` 作为唯一标识，对 Gitea 列表和腾讯会议列表进行对比，产生以下四种情况：
+
+| 情况 | 判断条件 | 处理方式 |
+|------|----------|----------|
+| **无变化** | 两侧都有，且时间差 < 5 分钟 | 跳过 |
+| **已取消** | Gitea 有（status=scheduled/brief-sent），腾讯无 | → cancel |
+| **已改期** | 两侧都有，但时间差 ≥ 5 分钟 | → reschedule |
+| **新增** | 腾讯有，Gitea 无对应 meeting_id | → create-pending |
+
+> **时间对比说明**：腾讯会议返回的是秒级时间戳，需先转为北京时间再与 Gitea 的 scheduled_time 对比。时间差 < 5 分钟视为无变化（避免时区/精度误差误判）。
+
+---
+
+### 第四步：对"已取消"的会议，调用 cancel
+
+```bash
+node main.js cancel \
+  --repo "HKU-AIFusion/dexterous-hand" \
+  --meeting-dir "2026-04-22-1500" \
+  --attendee-emails "email1@163.com,email2@163.com" \
+  [--cancel-reason "腾讯会议中已不存在"]
 ```
-腾讯会议新增
-  └─ Skill-H 检测到 → 暂存 pending/MEETING_ID.yaml
-                    → 邮件通知 advisor
-                    → advisor 在 OpenClaw 中回复归属
-                    → Skill-A 的 --repo-reply 流程处理
-                    → pending_store.delete_pending(meeting_id)
+
+返回 JSON，关键字段：
+- `success`
+- `cancel_email.to` / `.subject` / `.html`：取消通知邮件参数
+
+**收到返回后，OpenClaw 调用 imap-smtp-email 发送取消通知给全体参会人。**
+
+---
+
+### 第五步：对"已改期"的会议，调用 reschedule
+
+```bash
+node main.js reschedule \
+  --repo "HKU-AIFusion/dexterous-hand" \
+  --old-meeting-dir "2026-04-22-1500" \
+  --new-time "2026-04-23T15:00:00+08:00" \
+  --new-meeting-id "yyy" \
+  --new-meeting-code "987654321" \
+  --new-join-url "https://meeting.tencent.com/..." \
+  --attendee-emails "email1@163.com,email2@163.com"
 ```
 
-## 改期后的 meta.yaml 关键字段
+本命令会：
+1. 将旧目录 `meta.yaml` status → `rescheduled`，写入 `rescheduled_to` 字段
+2. 在同仓库创建新目录 `meetings/YYYY-MM-DD-HHMM/`，继承旧会议的 topic / attendees / organizer / category，写入 `rescheduled_from` 字段，status = `scheduled`
+3. 在新目录创建 `agenda.md`（注明"本次会议由 YYYY-MM-DD-HHMM 改期而来"）
 
-```yaml
-# 旧目录
-status: rescheduled
-rescheduled_at: "2026-04-22T10:00:00+08:00"
-rescheduled_to: "2026-04-29 15:00"
+返回 JSON，关键字段：
+- `success`
+- `new_meeting_dir`：新目录名
+- `reschedule_email.to` / `.subject` / `.html`：改期通知邮件参数
 
-# 新目录
-status: scheduled
-rescheduled_from: "2026-04-22-1500"   # Skill-B 看到此字段会跳过发简报
+**收到返回后，OpenClaw 调用 imap-smtp-email 发送改期通知给全体参会人。**
+
+---
+
+### 第六步：对"新增"的会议（腾讯有，Gitea 无），调用 create-pending
+
+```bash
+node main.js create-pending \
+  --meeting-id "zzz" \
+  --meeting-code "111222333" \
+  --topic "未知主题" \
+  --time "2026-04-24T10:00:00+08:00" \
+  --join-url "https://meeting.tencent.com/..." \
+  [--duration 60]
 ```
 
-## 容错设计
+本命令会：
+1. 在 `aifusion-meta/meetings/YYYY-MM-DD-HHMM/` 创建占位目录
+2. 写入 `meta.yaml`（status=scheduled，repo=pending）
 
-- 腾讯会议 API 失败 → 跳过新增/取消/改期处理，仍执行归档清理
-- 单条会议处理失败 → 记录日志继续处理下一条，不中断整体流程
-- 归档文件复制失败 → 记录日志，原目录状态不变，下轮重试
+返回 JSON，关键字段：
+- `success`
+- `meeting_dir`：创建的目录名
+- `notify_email.to` / `.subject` / `.html`：发给组织者（ADVISOR）的待确认通知邮件参数
 
-## 产物
+**收到返回后，OpenClaw 调用 imap-smtp-email 向组织者发送待确认通知。**
 
-- `aifusion-meta/pending/MEETING_ID.yaml`：归属待确认的新增会议
-- `aifusion-meta/logs/YYYY-MM-DD.jsonl`：汇总运行日志
-- `meetings/archive/YYYY-MM-DD-HHMM/`：归档的历史会议目录
-- 取消/改期通知邮件
+> 通知内容应说明："腾讯会议中发现一场新会议，尚未关联到 Gitea 仓库，请在 aifusion-meta 中修改 repo 字段或在 OpenClaw 中说明归属仓库。"
 
-## 依赖环境变量
+---
 
-见 env-example.txt（与前序 Skill 完全共享）
+### 第七步：archive 归档清理（每次 cron 最后执行）
+
+```bash
+node main.js archive
+```
+
+本命令会：
+1. 遍历所有受管仓库（包括 aifusion-meta）
+2. 找出 status ∈ {cancelled, rescheduled} 且 scheduled_time 距今超过 30 天的会议目录
+3. 将这些目录下所有文件复制到同仓库的 `meetings/archive/YYYY-MM-DD-HHMM/`
+4. 删除原目录下所有文件（Gitea API 逐文件删除）
+5. 写日志，返回归档摘要
+
+---
+
+## 错误处理规则
+
+| 错误场景 | 处理方式 |
+|----------|----------|
+| scan 失败 | 打印错误，本次 cron 中止 |
+| tencent-meeting-skill 调用失败 | 跳过本次同步，不修改任何 Gitea 状态 |
+| cancel / reschedule 写 Gitea 失败 | 记录错误，下次 cron 重试 |
+| create-pending 失败 | 记录错误，下次 cron 检测到同一会议时重试 |
+| 邮件发送失败 | 记录错误，不影响 Gitea 状态更新 |
+| archive 单个文件迁移失败 | 跳过该文件，继续处理其他文件，日志记录警告 |
+
+---
+
+## 幂等性说明
+
+- scan 只返回 status ∈ {scheduled, brief-sent} 的会议
+- cancel 成功后 status → cancelled，下次 cron 不再扫描到
+- reschedule 成功后旧目录 status → rescheduled，新目录 status=scheduled；下次 cron 只处理新目录
+- create-pending 用 meeting_id 作为 meta.yaml 的唯一标识；下次 cron 的 scan 会包含它（repo=pending 的目录也被 scan 返回以便追踪）；待组织者确认归属后人工处理
+- archive 只处理超过 30 天的目录，不会误归档活跃会议

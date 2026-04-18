@@ -1,18 +1,9 @@
-# 与前序 Skill 完全共享，无新增变量
-TENCENT_APP_ID=your_tencent_app_id
-TENCENT_SECRET_ID=your_tencent_secret_id
-TENCENT_SECRET_KEY=your_tencent_secret_key
-TENCENT_SDK_ID=your_tencent_sdk_id
-TENCENT_OPERATOR_ID=your_tencent_operator_userid
-
-GITEA_TOKEN_BOT=your_gitea_bot_token_here
+# Gitea
 GITEA_BASE_URL=http://43.156.243.152:3000
+GITEA_TOKEN_BOT=your_aifusionbot_access_token_here
+
+# 元信息仓库（用于统一日志 + 存放 pending 会议）
 AIFUSION_META_REPO=HKU-AIFusion/aifusion-meta
-ADVISOR_GITEA_USERNAME=advisor_username
 
-SMTP_HOST=smtp.163.com
-SMTP_PORT=465
-SMTP_USER=hku_aifusionbot@163.com
-SMTP_PASSWORD=your_smtp_password_here
-
-MINIMAX_API_KEY=your_minimax_api_key_here
+# 导师/管理员 Gitea 用户名（用于 create-pending 的通知邮件收件人 fallback）
+ADVISOR_GITEA_USERNAME=HKU-AIFusion

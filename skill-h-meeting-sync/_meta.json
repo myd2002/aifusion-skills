@@ -1,26 +1,6 @@
 {
   "name": "skill-h-meeting-sync",
-  "display_name": "后台同步 (meeting_sync)",
   "version": "1.0.0",
-  "description": "cron 每30分钟触发。拉取腾讯会议未来7天列表与Gitea所有仓库scheduled/brief-sent状态的会议做三向对比，处理新增/取消/改期三种变更，归档超30天的历史目录，保持两侧状态一致。",
-  "entry": "main.py",
-  "trigger": "cron",
-  "cron": "*/30 * * * *",
-  "author": "AIFusion",
-  "requires_env": [
-    "TENCENT_MEETING_TOKEN",
-    "TENCENT_APP_ID",
-    "TENCENT_SECRET_ID",
-    "TENCENT_SECRET_KEY",
-    "TENCENT_SDK_ID",
-    "TENCENT_OPERATOR_ID",
-    "GITEA_TOKEN_BOT",
-    "GITEA_BASE_URL",
-    "SMTP_HOST",
-    "SMTP_PORT",
-    "SMTP_USER",
-    "SMTP_PASSWORD",
-    "AIFUSION_META_REPO",
-    "ADVISOR_GITEA_USERNAME"
-  ]
+  "description": "会议全流程自动化 Skill-H：cron 每30分钟触发，同步腾讯会议与 Gitea 仓库的会议状态，处理取消/改期/新增三种场景，并定期归档过期目录",
+  "author": "mayidan"
 }
