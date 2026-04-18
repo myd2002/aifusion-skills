@@ -1,6 +1,6 @@
 ---
 name: skill-a-create-meeting
-description: "【会议创建总入口，必须优先触发】当用户提出任何新建会议、开会、约会、安排会议、预约会议、组会、周会、例会、讨论会、紧急会议、跨项目会议、循环会议相关需求时，必须优先使用此技能，而不要直接调用 tencent-meeting-skill。OpenClaw 负责意图分析和参数补全；本技能作为会议创建总控入口，负责协调后续流程：先由 OpenClaw 调用 tencent-meeting-skill 创建腾讯会议，再调用本技能完成 Gitea 会议目录、meta.yaml、agenda.md、仓库成员/邮箱查询、日志写入和邮件内容编排，最后由 OpenClaw 调用 imap-smtp-email 发送邀请邮件。只有当用户是在查询、修改、取消已有会议，或查看会议录制、转写、纪要时，才直接使用 tencent-meeting-skill。"
+description: "【会议创建总入口】专门用于创建会议，任何新建会议、开会、约会、安排会议、预约会议、组会、周会、例会、讨论会、紧急会议、跨项目会议、循环会议相关需求，必须优先使用本技能。本技能作为会议创建总控入口，负责协调后续流程：先由 OpenClaw 调用 tencent-meeting-skill 创建腾讯会议，再调用本技能完成 Gitea 会议目录、meta.yaml、agenda.md、仓库成员/邮箱查询、日志写入和邮件内容编排，最后由 OpenClaw 调用 imap-smtp-email 发送邀请邮件。"
 author: mayidan
 ---
 
