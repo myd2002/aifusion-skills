@@ -150,13 +150,17 @@ OpenClaw 必须先完成：
 ---
 
 ### 第二步：OpenClaw 调用 tencent-meeting-skill 创建腾讯会议
-
-OpenClaw 应先调用腾讯会议 skill，拿到：
-
+OpenClaw 应先调用腾讯会议 skill，拿到以下字段后，才能调用本技能：
 - `meeting_id`
 - `meeting_code`
 - `join_url`
 
+**⚠️ 默认会议配置（所有新建会议必须应用）：**
+- `auto_record_type: "local"` — 开启本地自动录制
+- `enable_transcription: true` — 开启实时转写（文字记录）
+- `enable_meeting_summary: true` — 开启智能纪要（AI 会议总结）
+
+> 注意：若 `tencent-meeting-skill` 的 `schedule_meeting` 工具不支持上述参数，请确认账户层面已开启自动录制+转写+智能纪要。创建后若工具返回缺少参数报错，可降级不传这些字段，但需告知用户。
 ---
 
 ### 第三步：调用本技能，完成 Gitea 侧落库与邮件内容准备
