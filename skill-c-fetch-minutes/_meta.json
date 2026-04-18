@@ -1,0 +1,26 @@
+{
+  "name": "skill-c-fetch-minutes",
+  "display_name": "会后抓取 (fetch_minutes)",
+  "version": "1.0.0",
+  "description": "cron 每 10 分钟触发。遍历所有受管仓库，扫描三类会议：A类(brief-sent已结束)、B类(waiting-transcript轮询)、C类(transcript-failed已手动上传)。三层降级拉取腾讯会议转录与AI智能纪要，MiniMax两阶段抽取生成draft_issue.md，通知组织者审核。",
+  "entry": "main.py",
+  "trigger": "cron",
+  "cron": "*/10 * * * *",
+  "author": "AIFusion",
+  "requires_env": [
+    "TENCENT_MEETING_TOKEN",
+    "TENCENT_APP_ID",
+    "TENCENT_SECRET_ID",
+    "TENCENT_SECRET_KEY",
+    "TENCENT_SDK_ID",
+    "TENCENT_OPERATOR_ID",
+    "GITEA_TOKEN_BOT",
+    "GITEA_BASE_URL",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "MINIMAX_API_KEY",
+    "AIFUSION_META_REPO"
+  ]
+}

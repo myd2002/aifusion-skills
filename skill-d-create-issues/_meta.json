@@ -1,0 +1,20 @@
+{
+  "name": "skill-d-create-issues",
+  "display_name": "批量建Issue (create_issues)",
+  "version": "1.0.0",
+  "description": "事件驱动。组织者确认issue草稿后触发：方式A=Gitea webhook检测confirmed_issue.md新增；方式B=OpenClaw对话调用。单项目会议批量创建Gitea issue并发送个人任务通知；跨项目会议仅发邮件不建issue。",
+  "entry": "main.py",
+  "trigger": "event",
+  "author": "AIFusion",
+  "requires_env": [
+    "GITEA_TOKEN_BOT",
+    "GITEA_BASE_URL",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "AIFUSION_META_REPO",
+    "WEBHOOK_SECRET",
+    "WEBHOOK_PORT"
+  ]
+}
