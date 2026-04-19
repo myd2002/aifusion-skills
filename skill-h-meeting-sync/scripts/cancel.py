@@ -3,12 +3,13 @@
 Skill-H cancel：将指定会议的 meta.yaml status 更新为 cancelled。
 写日志，返回取消通知邮件参数供 OpenClaw 调用 imap-smtp-email 发送。
 
+重要安全规则：
+- 只有“会议时间尚未到达”的会议，才允许自动标记为 cancelled
+- 如果 scheduled_time 已经 <= now，则不自动取消
+  因为腾讯会议中不存在这场会，也可能只是会议已经正常结束
+
 用法：
-    python3 cancel.py \
-      --repo "HKU-AIFusion/dexterous-hand" \
-      --meeting-dir "2026-04-22-1500" \
-      --attendee-emails "email1@163.com,email2@163.com" \
-      [--cancel-reason "腾讯会议中已不存在"]
+    python3 cancel.py       --repo "HKU-AIFusion/dexterous-hand"       --meeting-dir "2026-04-22-1500"       --attendee-emails "email1@163.com,email2@163.com"       [--cancel-reason "腾讯会议中已不存在，且会议时间尚未到达"]
 """
 
 import os
@@ -19,6 +20,7 @@ from datetime import datetime
 
 import pytz
 import yaml
+from dateutil.parser import parse as parse_dt
 from dotenv import load_dotenv
 
 load_dotenv(os.path.expanduser("~/.config/skill-h-meeting-sync/.env"))
@@ -34,12 +36,25 @@ META_REPO      = os.getenv("AIFUSION_META_REPO", "")
 TZ             = pytz.timezone("Asia/Shanghai")
 
 
+def parse_time_or_none(time_str):
+    """解析 ISO8601 时间；失败返回 None。"""
+    if not time_str:
+        return None
+    try:
+        dt = parse_dt(time_str)
+        if dt.tzinfo is None:
+            dt = TZ.localize(dt)
+        return dt.astimezone(TZ)
+    except Exception:
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Skill-H cancel：标记会议为已取消")
     parser.add_argument("--repo",            required=True, help="仓库全名")
     parser.add_argument("--meeting-dir",     required=True, help="会议目录名")
     parser.add_argument("--attendee-emails", default="",    help="逗号分隔的参会人邮箱")
-    parser.add_argument("--cancel-reason",   default="腾讯会议中已不存在", help="取消原因")
+    parser.add_argument("--cancel-reason",   default="腾讯会议中已不存在，且会议时间尚未到达", help="取消原因")
     args = parser.parse_args()
 
     owner, repo_name = args.repo.split("/", 1)
@@ -67,11 +82,44 @@ def main():
         }, ensure_ascii=False, indent=2))
         return
 
+    # ── 安全检查：会议时间已过，不自动取消 ────────────────────────────────────
+
+    scheduled_time_str = meta.get("scheduled_time", "")
+    scheduled_dt = parse_time_or_none(scheduled_time_str)
+    now = datetime.now(TZ)
+
+    if scheduled_dt and scheduled_dt <= now:
+        write_log({
+            "ts":          now.isoformat(),
+            "skill":       "skill-h",
+            "repo":        args.repo,
+            "meeting_dir": args.meeting_dir,
+            "action":      "meeting-cancel-skipped",
+            "status":      "skipped",
+            "details": {
+                "old_status":      old_status,
+                "scheduled_time":  scheduled_dt.isoformat(),
+                "now":             now.isoformat(),
+                "skip_reason":     "meeting_time_passed",
+                "cancel_reason":   args.cancel_reason,
+            },
+        }, META_REPO, GITEA_TOKEN, GITEA_BASE_URL)
+
+        print(json.dumps({
+            "success":      True,
+            "skipped":      True,
+            "skip_reason":  "meeting_time_passed",
+            "meeting_dir":  args.meeting_dir,
+            "current_status": old_status,
+            "message":      "会议时间已过，可能已正常结束；Skill-H 不自动将其标记为 cancelled",
+        }, ensure_ascii=False, indent=2))
+        return
+
     # ── 更新 meta.yaml ────────────────────────────────────────────────────────
 
     meta["status"]        = "cancelled"
     meta["cancel_reason"] = args.cancel_reason
-    meta["cancelled_at"]  = datetime.now(TZ).isoformat()
+    meta["cancelled_at"]  = now.isoformat()
 
     new_content = yaml.dump(meta, allow_unicode=True, default_flow_style=False, sort_keys=False)
     try:
@@ -86,7 +134,7 @@ def main():
     # ── 写日志 ────────────────────────────────────────────────────────────────
 
     write_log({
-        "ts":          datetime.now(TZ).isoformat(),
+        "ts":          now.isoformat(),
         "skill":       "skill-h",
         "repo":        args.repo,
         "meeting_dir": args.meeting_dir,
@@ -102,10 +150,9 @@ def main():
 
     attendee_emails = [e.strip() for e in args.attendee_emails.split(",") if e.strip()]
 
-    topic           = meta.get("topic", args.meeting_dir)
-    scheduled_time  = meta.get("scheduled_time", "")
-    meeting_code    = meta.get("meeting_code", "")
-    organizer       = meta.get("organizer", "")
+    topic          = meta.get("topic", args.meeting_dir)
+    meeting_code   = meta.get("meeting_code", "")
+    organizer      = meta.get("organizer", "")
 
     try:
         parts      = args.meeting_dir.split("-")
@@ -114,7 +161,7 @@ def main():
         time_label = args.meeting_dir
 
     html = build_cancel_html(
-        topic, scheduled_time, meeting_code,
+        topic, scheduled_time_str, meeting_code,
         args.repo, organizer, args.cancel_reason,
     )
 

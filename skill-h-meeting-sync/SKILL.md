@@ -15,20 +15,21 @@ author: mayidan
 - **OpenClaw（本次对话/cron 任务）**
   - 触发 scan，获取 Gitea 侧全部活跃会议
   - 调用 tencent-meeting-skill 获取腾讯会议侧未来 7 天会议列表
-  - 做三向对比分析，判断每场会议属于哪种情况（取消 / 改期 / 新增 / 无变化）
+  - 做三向对比分析，判断每场会议属于哪种情况（取消 / 改期 / 新增 / 已结束或已过期 / 无变化）
   - 根据分析结果，调用对应的 Skill-H 命令执行 Gitea 侧操作
   - 调用 imap-smtp-email 发送通知邮件
   - 在每次 cron 最后调用 archive 做归档清理
 
 - **Skill-H（本技能）**
   - `scan`：汇总所有 Gitea 活跃会议（status ∈ {scheduled, brief-sent}），返回供对比的数据
-  - `cancel`：将会议标记为已取消，写日志，返回取消通知邮件参数
+  - `cancel`：将“尚未开始但腾讯会议中已不存在”的会议标记为已取消，写日志，返回取消通知邮件参数
   - `reschedule`：更新旧目录状态为 rescheduled，创建新时间目录，写日志，返回改期通知邮件参数
   - `create-pending`：在 aifusion-meta 创建 repo:pending 的会议占位记录
   - `archive`：将 cancelled/rescheduled 状态超过 30 天的目录移入 meetings/archive/
 
 - **tencent-meeting-skill**
-  - 查询腾讯会议侧未来 7 天的会议列表（`get_user_meetings`）
+  - 查询腾讯会议侧未来 7 天会议列表（`get_user_meetings`）
+  - 查询当天已结束会议（`get_user_ended_meetings`），用于辅助排除“其实已经开完”的情况
 
 - **imap-smtp-email**
   - 发送取消通知、改期通知、新会议待确认通知邮件
@@ -77,24 +78,39 @@ node main.js scan
 
 调用 `get_user_meetings` 获取即将开始及进行中的会议，同时调用 `get_user_ended_meetings` 补充当天已结束会议。
 
-将结果整理为以 `meeting_id` 为 key 的字典，包含每场会议的 `scheduled_time`（开始时间戳）。
+将结果整理为两个字典：
 
-> 判断"未来 7 天内"：只保留 scheduled_time 在 now ~ now+7d 范围内的腾讯会议记录用于对比。
+1. **future_meetings_by_id**
+   - key：`meeting_id`
+   - value：会议信息（含 `scheduled_time`）
+
+2. **ended_meetings_by_id**
+   - key：`meeting_id`
+   - value：会议信息（含 `scheduled_time` 或结束标记）
+
+> 判断"未来 7 天内"：只保留 scheduled_time 在 now ~ now+7d 范围内的腾讯会议记录用于“未来会议”对比。  
+> `get_user_ended_meetings` 只用于排除“会议其实已经结束”的误判，不用于触发 cancel。
 
 ---
 
 ### 第三步：OpenClaw 做三向对比分析
 
-以 `meeting_id` 作为唯一标识，对 Gitea 列表和腾讯会议列表进行对比，产生以下四种情况：
+以 `meeting_id` 作为唯一标识，对 Gitea 列表、腾讯未来会议列表、腾讯已结束会议列表进行对比，产生以下五种情况：
 
 | 情况 | 判断条件 | 处理方式 |
 |------|----------|----------|
-| **无变化** | 两侧都有，且时间差 < 5 分钟 | 跳过 |
-| **已取消** | Gitea 有（status=scheduled/brief-sent），腾讯无 | → cancel |
-| **已改期** | 两侧都有，但时间差 ≥ 5 分钟 | → reschedule |
-| **新增** | 腾讯有，Gitea 无对应 meeting_id | → create-pending |
+| **无变化** | Gitea 有，腾讯未来会议也有，且时间差 < 5 分钟 | 跳过 |
+| **已改期** | Gitea 有，腾讯未来会议也有，但时间差 ≥ 5 分钟 | → reschedule |
+| **已结束或已过期** | Gitea 有，腾讯未来会议无，且（腾讯已结束列表中有该 meeting_id，或 Gitea `scheduled_time <= now`） | **跳过，不调用 cancel** |
+| **已取消** | Gitea 有，腾讯未来会议无，腾讯已结束列表也无，且 Gitea `scheduled_time > now` | → cancel |
+| **新增** | 腾讯未来会议有，Gitea 无对应 meeting_id | → create-pending |
 
-> **时间对比说明**：腾讯会议返回的是秒级时间戳，需先转为北京时间再与 Gitea 的 scheduled_time 对比。时间差 < 5 分钟视为无变化（避免时区/精度误差误判）。
+> **关键修正：**
+> - “腾讯会议中没有这场会” **不等于** “已取消”
+> - 它也可能表示：会议已正常结束，或者会议时间已经过去
+> - 因此只有“**尚未开始 + 腾讯未来列表中不存在 + 腾讯已结束列表中也不存在**”时，才允许判定为取消
+
+> **时间对比说明**：腾讯会议返回的是秒级时间戳，需先转为北京时间再与 Gitea 的 `scheduled_time` 对比。时间差 < 5 分钟视为无变化（避免时区/精度误差误判）。
 
 ---
 
@@ -105,14 +121,29 @@ node main.js cancel \
   --repo "HKU-AIFusion/dexterous-hand" \
   --meeting-dir "2026-04-22-1500" \
   --attendee-emails "email1@163.com,email2@163.com" \
-  [--cancel-reason "腾讯会议中已不存在"]
+  [--cancel-reason "腾讯会议中已不存在，且会议时间尚未到达"]
 ```
 
-返回 JSON，关键字段：
-- `success`
-- `cancel_email.to` / `.subject` / `.html`：取消通知邮件参数
+返回 JSON，可能有两种结果：
 
-**收到返回后，OpenClaw 调用 imap-smtp-email 发送取消通知给全体参会人。**
+#### 结果 A：真正取消成功
+- `success: true`
+- `new_status: "cancelled"`
+- `cancel_email.to` / `.subject` / `.html`
+
+此时 OpenClaw 调用 imap-smtp-email 发送取消通知给全体参会人。
+
+#### 结果 B：被 Skill-H 安全拦截
+- `success: true`
+- `skipped: true`
+- `skip_reason: "meeting_time_passed"`
+
+表示：
+- 会议时间已过
+- Skill-H 判断它可能是“已经正常开完”或“已过期未清理”
+- **不会写 cancelled**
+- **不会返回取消邮件参数**
+- OpenClaw 应记录日志后直接跳过
 
 ---
 
@@ -202,6 +233,7 @@ node main.js archive
 
 - scan 只返回 status ∈ {scheduled, brief-sent} 的会议
 - cancel 成功后 status → cancelled，下次 cron 不再扫描到
+- 若会议时间已过，cancel 会返回 `skipped=true`，不会误写为 cancelled
 - reschedule 成功后旧目录 status → rescheduled，新目录 status=scheduled；下次 cron 只处理新目录
 - create-pending 用 meeting_id 作为 meta.yaml 的唯一标识；下次 cron 的 scan 会包含它（repo=pending 的目录也被 scan 返回以便追踪）；待组织者确认归属后人工处理
 - archive 只处理超过 30 天的目录，不会误归档活跃会议
