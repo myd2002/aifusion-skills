@@ -1,15 +1,12 @@
-# 与前序 Skill 共享
-GITEA_TOKEN_BOT=your_gitea_bot_token_here
+# Gitea
 GITEA_BASE_URL=http://43.156.243.152:3000
-AIFUSION_META_REPO=HKU-AIFusion/aifusion-meta
-ADVISOR_GITEA_USERNAME=advisor_username
-SMTP_HOST=smtp.163.com
-SMTP_PORT=465
-SMTP_USER=hku_aifusionbot@163.com
-SMTP_PASSWORD=your_smtp_password_here
+GITEA_TOKEN_BOT=your_aifusionbot_access_token_here
 
-# Webhook 配置
-# WEBHOOK_SECRET 需与 Gitea 每个仓库 webhook 配置中的 Secret 一致
-WEBHOOK_SECRET=your_webhook_secret_here
-# Webhook HTTP 服务监听端口
-WEBHOOK_PORT=8080
+# 元信息仓库（用于统一日志）
+AIFUSION_META_REPO=HKU-AIFusion/aifusion-meta
+
+# Webhook 服务端口（Gitea webhook 回调地址需与此一致）
+WEBHOOK_PORT=8765
+
+# Webhook secret（在 Gitea 配置 webhook 时填写的 secret，留空则不验签）
+WEBHOOK_SECRET=
