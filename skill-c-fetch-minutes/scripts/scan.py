@@ -2,8 +2,9 @@
 """
 Skill-C scan：遍历所有受管仓库，返回三类待处理会议。
 
-A 类：status == brief-sent
+A 类：status in {scheduled, brief-sent}
   → OpenClaw 判断是否已结束，已结束则 set-waiting
+  → 这样即使会前简报漏发，会议结束后也不会卡住整个会后流程
 
 B 类：status == waiting-transcript
   → OpenClaw 判断是否超时（>60分钟），超时则 set-failed；
@@ -112,8 +113,10 @@ def scan_repo(full_name):
 
         status = meta.get("status", "")
 
-        # ── A 类：brief-sent ───────────────────────────────────────────────────
-        if status == "brief-sent":
+        # ── A 类：scheduled / brief-sent ─────────────────────────────────────
+        # 兼容“会前简报漏发”的情况：即使还停留在 scheduled，只要会议已结束，
+        # OpenClaw 也可以继续推进到 waiting-transcript。
+        if status in {"scheduled", "brief-sent"}:
             class_a.append(make_meeting_record(full_name, dir_name, meta, owner, repo_name))
 
         # ── B 类：waiting-transcript ──────────────────────────────────────────
@@ -134,7 +137,6 @@ def scan_repo(full_name):
                 GITEA_TOKEN, GITEA_BASE_URL,
             )
             if transcript_exists:
-                # 同时把 transcript 内容读出来，省得 OpenClaw 再调一次
                 transcript_content, _ = get_file_from_repo(
                     owner, repo_name,
                     f"meetings/{dir_name}/transcript.md",

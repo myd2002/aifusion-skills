@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Skill-C set-waiting：将会议状态 brief-sent → waiting-transcript。
+Skill-C set-waiting：将会议状态 scheduled / brief-sent → waiting-transcript。
 记录 transcript_started_at 时间戳，初始化 transcript_poll_count = 0。
+
+这样即使会前简报没有成功发送，会议结束后也能直接进入会后流程。
 
 用法：
     python3 set_waiting.py \
@@ -55,15 +57,15 @@ def main():
     if old_status == "waiting-transcript":
         started_at = meta.get("transcript_started_at", datetime.now(TZ).isoformat())
         print(json.dumps({
-            "success":              True,
-            "idempotent":           True,
+            "success":               True,
+            "idempotent":            True,
             "transcript_started_at": started_at,
-            "message":              "已处于 waiting-transcript 状态",
+            "message":               "已处于 waiting-transcript 状态",
         }, ensure_ascii=False, indent=2))
         return
 
-    if old_status != "brief-sent":
-        _fail(f"状态不符：期望 brief-sent，实际 {old_status}")
+    if old_status not in {"brief-sent", "scheduled"}:
+        _fail(f"状态不符：期望 brief-sent 或 scheduled，实际 {old_status}")
 
     now_str = datetime.now(TZ).isoformat()
     meta["status"]                = "waiting-transcript"
@@ -74,7 +76,7 @@ def main():
     try:
         update_file_in_repo(
             owner, repo_name, meta_path, new_content,
-            f"chore(meeting): brief-sent → waiting-transcript [{args.meeting_dir}]",
+            f"chore(meeting): {old_status} → waiting-transcript [{args.meeting_dir}]",
             sha, GITEA_TOKEN, GITEA_BASE_URL,
         )
     except Exception as e:
@@ -94,6 +96,7 @@ def main():
         "success":               True,
         "meeting_dir":           args.meeting_dir,
         "new_status":            "waiting-transcript",
+        "old_status":            old_status,
         "transcript_started_at": now_str,
     }, ensure_ascii=False, indent=2))
 
