@@ -1,18 +1,6 @@
-# 与 Skill-A 共享，新增腾讯会议相关配置
-TENCENT_APP_ID=your_tencent_app_id
-TENCENT_SECRET_ID=your_tencent_secret_id
-TENCENT_SECRET_KEY=your_tencent_secret_key
-TENCENT_SDK_ID=your_tencent_sdk_id
-TENCENT_OPERATOR_ID=your_tencent_operator_userid
-
-GITEA_TOKEN_BOT=your_gitea_bot_token_here
+# Gitea
 GITEA_BASE_URL=http://43.156.243.152:3000
-AIFUSION_META_REPO=HKU-AIFusion/aifusion-meta
-SMTP_HOST=smtp.163.com
-SMTP_PORT=465
-SMTP_USER=hku_aifusionbot@163.com
-SMTP_PASSWORD=your_smtp_password_here
-MINIMAX_API_KEY=your_minimax_api_key_here
+GITEA_TOKEN_BOT=your_aifusionbot_access_token_here
 
-# 转录轮询超时分钟数（默认60）
-TRANSCRIPT_TIMEOUT_MINUTES=60
+# 元信息仓库（用于统一日志）
+AIFUSION_META_REPO=HKU-AIFusion/aifusion-meta
