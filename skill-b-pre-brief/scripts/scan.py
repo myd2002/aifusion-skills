@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Skill-B scan：遍历所有受管仓库，找出需要在 [now+30min, now+4h] 内发送会前简报的会议。
+Skill-B scan：遍历所有受管仓库，找出需要在 [now+15min, now+6h] 内发送会前简报的会议。
 
 对每场命中会议：
   - 计算 Gitea 活动时间窗口（since / until）
@@ -42,9 +42,9 @@ GITEA_BASE_URL = os.getenv("GITEA_BASE_URL", "")
 GITEA_TOKEN    = os.getenv("GITEA_TOKEN_BOT", "")
 TZ             = pytz.timezone("Asia/Shanghai")
 
-# 简报发送时间窗口：会议开始前 30 分钟至 4 小时内
-WINDOW_MIN = timedelta(minutes=30)
-WINDOW_MAX = timedelta(hours=4)
+# 简报发送时间窗口：会议开始前 15 分钟至 6 小时内
+WINDOW_MIN = timedelta(minutes=15)
+WINDOW_MAX = timedelta(hours=6)
 
 # 找不到历史会议时的默认回溯时间
 FALLBACK_DAYS = 7
@@ -163,8 +163,8 @@ def scan_repo(full_name):
     """
     owner, repo_name = full_name.split("/", 1)
     now = datetime.now(TZ)
-    window_start = now + WINDOW_MIN   # 30 分钟后
-    window_end   = now + WINDOW_MAX   # 4 小时后
+    window_start = now + WINDOW_MIN   # 15 分钟后
+    window_end   = now + WINDOW_MAX   # 6 小时后
 
     dirs = list_meetings_in_repo(owner, repo_name, GITEA_TOKEN, GITEA_BASE_URL)
     results = []
@@ -198,7 +198,7 @@ def scan_repo(full_name):
         except Exception:
             continue
 
-        # 检查是否在发送窗口内 [now+30min, now+4h]
+        # 检查是否在发送窗口内 [now+15min, now+6h]
         if not (window_start <= meeting_time <= window_end):
             continue
 

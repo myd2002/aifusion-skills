@@ -1,6 +1,6 @@
 ---
 name: skill-b-pre-brief
-description: "【会前简报定时任务】每15分钟由 OpenClaw cron 触发一次。负责在会议开始前30分钟至4小时内自动生成并发送会前进度简报。不处理会议创建、会议修改、取消会议、会后纪要等场景。触发关键词：会前简报、pre_brief、发简报、会前准备报告。cron 场景下自动触发，无需用户主动输入。"
+description: "【会前简报定时任务】每15分钟由 OpenClaw cron 触发一次。负责在会议开始前15分钟至6小时内自动生成并发送会前进度简报。不处理会议创建、会议修改、取消会议、会后纪要等场景。触发关键词：会前简报、pre_brief、发简报、会前准备报告。cron 场景下自动触发，无需用户主动输入。"
 author: mayidan
 ---
 
@@ -69,6 +69,8 @@ node main.js scan
 - `since`：Gitea 活动统计开始时间（ISO8601）
 - `until`：Gitea 活动统计结束时间（ISO8601）
 - `report_params`：传给 gitea-routine-report 的参数 `{repo, since, until}`
+
+**只有会议时间落在“开始前 15 分钟到 6 小时”这个窗口内，才会被 scan 命中。**
 
 **如果 `meetings` 为空，本次 cron 无需继续执行。**
 
