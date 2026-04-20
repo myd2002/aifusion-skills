@@ -1,8 +1,0 @@
-我是windows电脑，用户名myd（即C:\Users\myd\Desktop）
-
-买的腾讯云的轻量应用服务器，地址在新加坡，公网ip是43.156.243.152，用户名ubuntu，用ssh密钥登录，路径C:\Users\myd\Desktop\AiFusion.pem
-
-在队友买的服务器自带的配置好了的openclaw，同时连上了minimax的MiniMax-M2.7的api
-
-
-ssh -N -L 31017:127.0.0.1:31017 ubuntu@43.156.243.152和http://127.0.0.1:31017/tkba75/#token=eac45509fee4a8087d773f5fd87c85a7d4a7a748f6156153是队友分享给我的，连接上之后在这个网址可以和openclaw对话

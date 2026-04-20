@@ -1,8 +1,0 @@
-我是一个研究生，我的能力有限，基础很薄弱，对AI的了解和普通大众一样。现在我想要完成我的毕设。
-
-毕设项目名称：Gitea-based Research Project Management Automation System Development
-毕设项目介绍：The project aims to develop an automated management system for research projects based on the Giteaplatform, streamlining repository initialization, issue tracking, notifications, and documentationworkflows. The outcome will intuitive frontend interfaces, robust backend functions, and DevOpsintegration for continuous integration and deployment.
-
-项目背景：有一个做灵巧手项目的团队，他们当中有设计，感知视触觉，驱动让手动起来，控制，算法这些人。会涉及建模、代码、文档、训练数据。会用到gitea、邮件、会议、飞书等工具。在科研过程中会因为沟通协作影响效率。
-项目目的：希望可以做一个agent，帮助他们解决沟通协作当中的问题，提高他们的效率（要求必须是真实有用的），让流程更加自动化。
-我对项目的要求：我有两万块经费，所以我要用云服务器，现成的llm（minimax）和现成的agent（openclaw），另外如果有其他服务需要花钱也不用担心。但要保持项目的简单可完成性，因为我的水平和时间有限（不到两个月）。
