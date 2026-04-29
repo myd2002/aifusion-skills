@@ -3,7 +3,10 @@
 Skill-C set-waiting：将会议状态 scheduled / brief-sent → waiting-transcript。
 记录 transcript_started_at 时间戳，初始化 transcript_poll_count = 0。
 
-这样即使会前简报没有成功发送，会议结束后也能直接进入会后流程。
+重要安全规则：
+- 只有会议真正结束后，并额外等待 20 分钟，才允许自动进入 waiting-transcript
+- 如果条件未满足，本脚本返回 skipped=true，不推进状态
+- 即使 OpenClaw 误调用，本脚本也会拦截未满足条件的会议
 
 用法：
     python3 set_waiting.py \
@@ -15,10 +18,11 @@ import os
 import sys
 import json
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 import yaml
+from dateutil.parser import parse as parse_dt
 from dotenv import load_dotenv
 
 load_dotenv(os.path.expanduser("~/.config/skill-c-fetch-minutes/.env"))
@@ -31,6 +35,21 @@ GITEA_BASE_URL = os.getenv("GITEA_BASE_URL", "")
 GITEA_TOKEN    = os.getenv("GITEA_TOKEN_BOT", "")
 META_REPO      = os.getenv("AIFUSION_META_REPO", "")
 TZ             = pytz.timezone("Asia/Shanghai")
+
+POST_MEETING_GRACE_MINUTES = 20
+
+
+def parse_time_or_none(time_str):
+    """解析 ISO8601 时间；失败返回 None。"""
+    if not time_str:
+        return None
+    try:
+        dt = parse_dt(time_str)
+        if dt.tzinfo is None:
+            dt = TZ.localize(dt)
+        return dt.astimezone(TZ)
+    except Exception:
+        return None
 
 
 def main():
@@ -67,7 +86,58 @@ def main():
     if old_status not in {"brief-sent", "scheduled"}:
         _fail(f"状态不符：期望 brief-sent 或 scheduled，实际 {old_status}")
 
-    now_str = datetime.now(TZ).isoformat()
+    # ── 安全检查：必须“会议结束 + 20 分钟缓冲”后才能进入 waiting-transcript ──
+
+    scheduled_dt = parse_time_or_none(meta.get("scheduled_time", ""))
+    if scheduled_dt is None:
+        _fail("scheduled_time 缺失或解析失败，拒绝进入 waiting-transcript")
+
+    try:
+        duration_minutes = int(meta.get("duration_minutes", 60) or 60)
+    except Exception:
+        duration_minutes = 60
+
+    end_dt = scheduled_dt + timedelta(minutes=duration_minutes)
+    ready_after_dt = end_dt + timedelta(minutes=POST_MEETING_GRACE_MINUTES)
+    now = datetime.now(TZ)
+
+    if now <= ready_after_dt:
+        write_log({
+            "ts":          now.isoformat(),
+            "skill":       "skill-c",
+            "repo":        args.repo,
+            "meeting_dir": args.meeting_dir,
+            "action":      "set-waiting-transcript-skipped",
+            "status":      "skipped",
+            "details": {
+                "old_status":                old_status,
+                "scheduled_time":            scheduled_dt.isoformat(),
+                "duration_minutes":          duration_minutes,
+                "meeting_end_time":          end_dt.isoformat(),
+                "ready_after_time":          ready_after_dt.isoformat(),
+                "postprocess_grace_minutes": POST_MEETING_GRACE_MINUTES,
+                "now":                       now.isoformat(),
+                "skip_reason":               "meeting_not_finished_long_enough",
+            },
+        }, META_REPO, GITEA_TOKEN, GITEA_BASE_URL)
+
+        print(json.dumps({
+            "success":                    True,
+            "skipped":                    True,
+            "skip_reason":                "meeting_not_finished_long_enough",
+            "meeting_dir":                args.meeting_dir,
+            "current_status":             old_status,
+            "scheduled_time":             scheduled_dt.isoformat(),
+            "meeting_end_time":           end_dt.isoformat(),
+            "ready_after_time":           ready_after_dt.isoformat(),
+            "postprocess_grace_minutes":  POST_MEETING_GRACE_MINUTES,
+            "message":                    "会议尚未结束超过 20 分钟，Skill-C 不进入 waiting-transcript",
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # ── 正常推进状态 ─────────────────────────────────────────────────────────
+
+    now_str = now.isoformat()
     meta["status"]                = "waiting-transcript"
     meta["transcript_started_at"] = now_str
     meta["transcript_poll_count"] = 0
@@ -83,13 +153,20 @@ def main():
         _fail(f"meta.yaml 更新失败：{e}")
 
     write_log({
-        "ts":          datetime.now(TZ).isoformat(),
+        "ts":          now.isoformat(),
         "skill":       "skill-c",
         "repo":        args.repo,
         "meeting_dir": args.meeting_dir,
         "action":      "set-waiting-transcript",
         "status":      "ok",
-        "details":     {"old_status": old_status},
+        "details": {
+            "old_status":                old_status,
+            "scheduled_time":            scheduled_dt.isoformat(),
+            "duration_minutes":          duration_minutes,
+            "meeting_end_time":          end_dt.isoformat(),
+            "ready_after_time":          ready_after_dt.isoformat(),
+            "postprocess_grace_minutes": POST_MEETING_GRACE_MINUTES,
+        },
     }, META_REPO, GITEA_TOKEN, GITEA_BASE_URL)
 
     print(json.dumps({
@@ -98,6 +175,9 @@ def main():
         "new_status":            "waiting-transcript",
         "old_status":            old_status,
         "transcript_started_at": now_str,
+        "meeting_end_time":      end_dt.isoformat(),
+        "ready_after_time":      ready_after_dt.isoformat(),
+        "postprocess_grace_minutes": POST_MEETING_GRACE_MINUTES,
     }, ensure_ascii=False, indent=2))
 
 

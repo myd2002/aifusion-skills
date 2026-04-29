@@ -2,9 +2,10 @@
 """
 Skill-C scan：遍历所有受管仓库，返回三类待处理会议。
 
-A 类：status in {scheduled, brief-sent}
-  → OpenClaw 判断是否已结束，已结束则 set-waiting
+A 类：status in {scheduled, brief-sent} 且“已结束超过 20 分钟”
+  → 只有满足 end_time + 20min < now，才允许进入会后流程
   → 这样即使会前简报漏发，会议结束后也不会卡住整个会后流程
+  → 同时避免未开始/刚结束会议被误判
 
 B 类：status == waiting-transcript
   → OpenClaw 判断是否超时（>60分钟），超时则 set-failed；
@@ -20,10 +21,11 @@ C 类：status == transcript-failed 且 transcript.md 已存在
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 import yaml
+from dateutil.parser import parse as parse_dt
 from dotenv import load_dotenv
 
 load_dotenv(os.path.expanduser("~/.config/skill-c-fetch-minutes/.env"))
@@ -41,6 +43,22 @@ from gitea_utils import (
 GITEA_BASE_URL = os.getenv("GITEA_BASE_URL", "")
 GITEA_TOKEN    = os.getenv("GITEA_TOKEN_BOT", "")
 TZ             = pytz.timezone("Asia/Shanghai")
+
+# 会议结束后再额外等待 20 分钟，才允许进入会后流程
+POST_MEETING_GRACE_MINUTES = 20
+
+
+def parse_time_or_none(time_str):
+    """解析 ISO8601 时间，失败返回 None。"""
+    if not time_str:
+        return None
+    try:
+        dt = parse_dt(time_str)
+        if dt.tzinfo is None:
+            dt = TZ.localize(dt)
+        return dt.astimezone(TZ)
+    except Exception:
+        return None
 
 
 def get_organizer_email(meta, owner, repo_name):
@@ -63,17 +81,60 @@ def get_attendee_emails(attendees, owner, repo_name):
     ]
 
 
+def build_postprocess_timing(meta):
+    """
+    计算会议结束与是否允许进入会后流程。
+    返回：
+      {
+        "scheduled_dt": datetime|None,
+        "duration_minutes": int,
+        "end_dt": datetime|None,
+        "ready_after_dt": datetime|None,
+        "ready_for_postprocess": bool,
+      }
+    """
+    scheduled_dt = parse_time_or_none(meta.get("scheduled_time", ""))
+    try:
+        duration_minutes = int(meta.get("duration_minutes", 60) or 60)
+    except Exception:
+        duration_minutes = 60
+
+    if scheduled_dt is None:
+        return {
+            "scheduled_dt": None,
+            "duration_minutes": duration_minutes,
+            "end_dt": None,
+            "ready_after_dt": None,
+            "ready_for_postprocess": False,
+        }
+
+    end_dt = scheduled_dt + timedelta(minutes=duration_minutes)
+    ready_after_dt = end_dt + timedelta(minutes=POST_MEETING_GRACE_MINUTES)
+    now = datetime.now(TZ)
+
+    return {
+        "scheduled_dt": scheduled_dt,
+        "duration_minutes": duration_minutes,
+        "end_dt": end_dt,
+        "ready_after_dt": ready_after_dt,
+        "ready_for_postprocess": now > ready_after_dt,
+    }
+
+
 def make_meeting_record(full_name, dir_name, meta, owner, repo_name, extra=None):
     """构造统一格式的会议记录供 OpenClaw 使用。"""
     attendees = meta.get("attendees") or get_repo_member_usernames(
         owner, repo_name, GITEA_TOKEN, GITEA_BASE_URL
     )
+
+    timing = build_postprocess_timing(meta)
+
     record = {
         "repo":              full_name,
         "meeting_dir":       dir_name,
         "topic":             meta.get("topic", ""),
         "scheduled_time":    meta.get("scheduled_time", ""),
-        "duration_minutes":  meta.get("duration_minutes", 60),
+        "duration_minutes":  timing["duration_minutes"],
         "meeting_id":        meta.get("meeting_id", ""),
         "meeting_code":      meta.get("meeting_code", ""),
         "join_url":          meta.get("join_url", ""),
@@ -83,6 +144,10 @@ def make_meeting_record(full_name, dir_name, meta, owner, repo_name, extra=None)
         "attendee_emails":   get_attendee_emails(attendees, owner, repo_name),
         "category":          meta.get("meeting_category", "single"),
         "status":            meta.get("status", ""),
+        "meeting_end_time":  timing["end_dt"].isoformat() if timing["end_dt"] else "",
+        "ready_after_time":  timing["ready_after_dt"].isoformat() if timing["ready_after_dt"] else "",
+        "ready_for_postprocess": timing["ready_for_postprocess"],
+        "postprocess_grace_minutes": POST_MEETING_GRACE_MINUTES,
     }
     if extra:
         record.update(extra)
@@ -112,11 +177,12 @@ def scan_repo(full_name):
             continue
 
         status = meta.get("status", "")
+        timing = build_postprocess_timing(meta)
 
-        # ── A 类：scheduled / brief-sent ─────────────────────────────────────
-        # 兼容“会前简报漏发”的情况：即使还停留在 scheduled，只要会议已结束，
-        # OpenClaw 也可以继续推进到 waiting-transcript。
+        # ── A 类：scheduled / brief-sent，但必须已经结束超过 20 分钟 ─────────
         if status in {"scheduled", "brief-sent"}:
+            if not timing["ready_for_postprocess"]:
+                continue
             class_a.append(make_meeting_record(full_name, dir_name, meta, owner, repo_name))
 
         # ── B 类：waiting-transcript ──────────────────────────────────────────
@@ -181,6 +247,7 @@ def main():
         "scanned_repos": len(repos),
         "errors":        errors,
         "scan_time":     datetime.now(TZ).isoformat(),
+        "postprocess_grace_minutes": POST_MEETING_GRACE_MINUTES,
     }, ensure_ascii=False, indent=2))
 
 
